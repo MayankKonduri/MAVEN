@@ -1,31 +1,20 @@
 #!/usr/bin/env python3
-"""
-samsung_ir.py — IR Transmitter (database-driven)
-=================================================
-Loads IR codes from ir_codes.db and sends them on keypress.
-Learn new codes first with: python3 learn_ir_code.py
-
-Key numbers are fixed (1-13) and always match the button order in the db.
-Only learned buttons are usable; unlearned ones are not shown.
-
-Wiring:
-    IR LED anode → GPIO 17 (BCM) / physical pin 11 via 100ohm resistor
-    IR LED cathode → GND
-"""
-
 import pigpio
 import time
 import json
 import sqlite3
+import threading
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# configuration
 
 IR_LED_PIN   = 17
 CARRIER_HZ   = 38000
 CARRIER_DUTY = 0.33
 DB_FILE      = "ir_codes.db"
 
-# ── Database ──────────────────────────────────────────────────────────────────
+STATUS_LED_PIN = 22
+
+# helper function to load learned codes from the database, returning a dict of {str(id): (name, pulses)} for only learned codes (pulses not NULL)
 
 def load_learned_codes(db_file):
     """
@@ -40,7 +29,7 @@ def load_learned_codes(db_file):
     conn.close()
     return {str(r["id"]): (r["name"], json.loads(r["pulses"])) for r in rows}
 
-# ── IR transmit logic ─────────────────────────────────────────────────────────
+# IR transmission logic
 
 CARRIER_PERIOD_US = int(1_000_000 / CARRIER_HZ)
 CARRIER_ON_US     = int(CARRIER_PERIOD_US * CARRIER_DUTY)
@@ -88,7 +77,12 @@ def send_stored(pi, stored_pulses):
         time.sleep(0.001)
     pi.wave_delete(wave)
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# red led blink to indicate code was sent successfully
+def flash_status_led(pi, duration=0.5):
+    pi.write(STATUS_LED_PIN, 1)
+    threading.Timer(duration, pi.write, args=(STATUS_LED_PIN, 0)).start()
+
+# main loop
 
 def main():
     shortcuts = load_learned_codes(DB_FILE)
@@ -109,6 +103,9 @@ def main():
     pi.set_mode(IR_LED_PIN, pigpio.OUTPUT)
     pi.write(IR_LED_PIN, 0)
 
+    pi.set_mode(STATUS_LED_PIN, pigpio.OUTPUT)
+    pi.write(STATUS_LED_PIN, 0)
+
     try:
         while True:
             key = input("Key: ").strip().lower()
@@ -118,6 +115,7 @@ def main():
                 name, pulses = shortcuts[key]
                 print(f"  Sending {name}...", end=" ", flush=True)
                 send_stored(pi, pulses)
+                flash_status_led(pi)
                 print("done")
             else:
                 valid = sorted(shortcuts.keys(), key=int)
@@ -126,6 +124,7 @@ def main():
         pass
     finally:
         pi.write(IR_LED_PIN, 0)
+        pi.write(STATUS_LED_PIN, 0)
         pi.stop()
         print("\nDone.")
 

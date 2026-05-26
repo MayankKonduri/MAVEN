@@ -1,36 +1,10 @@
 #!/usr/bin/env python3
-"""
-learn_ir_code.py — IR Code Learner
-===================================
-Learns 13 standard TV buttons in order and saves them to ir_codes.db (SQLite).
-
-Button order:
-    1  power_toggle    2  vol_up        3  vol_down
-    4  mute            5  channel_up    6  channel_down
-    7  home            8  left          9  up
-    10 right           11 down          12 enter
-    13 return
-
-Usage:
-    python3 learn_ir_code.py
-
-Commands:
-    l = learn   steps through all empty slots in order; timeout to skip
-    v = view    shows all 13 buttons with decoded bytes or Empty
-    c = clear all
-
-Wiring:
-    TSOP32438 pin 1 (OUT) → GPIO 27 (BCM) / physical pin 13
-    TSOP32438 pin 2 (GND) → any GND
-    TSOP32438 pin 3 (VS)  → 3.3V
-"""
-
 import pigpio
 import time
 import json
 import sqlite3
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# configuration
 
 IR_RECV_PIN = 27
 PACKET_GAP  = 15_000
@@ -52,7 +26,7 @@ BUTTON_ORDER = [
     "return",
 ]
 
-# ── Database ──────────────────────────────────────────────────────────────────
+# SQL Database helper function for storing learned codes.
 
 def db_connect():
     conn = sqlite3.connect(DB_FILE)
@@ -104,7 +78,7 @@ def db_view(conn):
         print(f"  {row['id']:<4} {row['name']:<16} {status}")
     print()
 
-# ── IR receive ────────────────────────────────────────────────────────────────
+# IR receive logic
 
 class IRReceiver:
     def __init__(self, pi, pin):
@@ -140,7 +114,7 @@ class IRReceiver:
     def cancel(self):
         self._cb.cancel()
 
-# ── Decode helpers ────────────────────────────────────────────────────────────
+# helper functions to convert between raw pulses and pigpio waveforms, and to decode NEC protocol from raw pulses
 
 def decode_nec(pulses):
     """
@@ -199,7 +173,7 @@ def print_packet(pulses):
 def pulses_to_storable(pulses):
     return [{"level": lvl, "duration": dur} for lvl, dur in pulses]
 
-# ── Learn flow ────────────────────────────────────────────────────────────────
+# learning flow for user interaction to capture and store IR codes in the database, one button at a time
 
 def learn_one_code(receiver, conn, name):
     """
@@ -211,11 +185,9 @@ def learn_one_code(receiver, conn, name):
     if ans != 'y':
         return "skip"
 
-    # Flush any stale packet sitting in the buffer from previous activity
+    # resetting state before capture to avoid bleed-over from previous captures
     receiver._packet = None
     receiver._pulses = []
-
-    # Flush buffer — discard anything captured before the prompt
     receiver._packet = None
     receiver._pulses = []
     receiver._last   = None
@@ -225,8 +197,6 @@ def learn_one_code(receiver, conn, name):
         print("  Timed out — skipping.")
         return "skip"
 
-    # The packet was just finalized — wait briefly for the line to go idle
-    # so the next button press doesn't bleed into this capture
     time.sleep(0.5)
 
     print_packet(packet)
@@ -255,7 +225,7 @@ def learn_all(receiver, conn):
 
     print(f"\n  Done — learned {learned}/{total} buttons this session.")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main loop 
 
 def main():
     pi = pigpio.pi()
