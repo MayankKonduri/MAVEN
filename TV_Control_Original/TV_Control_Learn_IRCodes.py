@@ -3,12 +3,14 @@ import pigpio
 import time
 import json
 import sqlite3
+import threading
 
 # configuration
 
-IR_RECV_PIN = 27
-PACKET_GAP  = 15_000
-DB_FILE     = "ir_codes.db"
+IR_RECV_PIN    = 27
+PACKET_GAP     = 15_000
+DB_FILE        = "ir_codes.db"
+LISTEN_LED_PIN = 23
 
 BUTTON_ORDER = [
     "power_toggle",
@@ -173,9 +175,36 @@ def print_packet(pulses):
 def pulses_to_storable(pulses):
     return [{"level": lvl, "duration": dur} for lvl, dur in pulses]
 
+# listen LED blink logic
+
+class ListenLED:
+    def __init__(self, pi, pin):
+        self.pi       = pi
+        self.pin      = pin
+        self._stop    = threading.Event()
+        self._thread  = None
+
+    def start(self):
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._blink, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._thread:
+            self._thread.join()
+        self.pi.write(self.pin, 0)
+
+    def _blink(self):
+        while not self._stop.is_set():
+            self.pi.write(self.pin, 1)
+            self._stop.wait(0.25)
+            self.pi.write(self.pin, 0)
+            self._stop.wait(0.25)
+
 # learning flow for user interaction to capture and store IR codes in the database, one button at a time
 
-def learn_one_code(receiver, conn, name):
+def learn_one_code(receiver, conn, name, listen_led):
     """
     Learn a single named button.
     Returns 'saved', 'skip', or 'quit'.
@@ -192,7 +221,10 @@ def learn_one_code(receiver, conn, name):
     receiver._pulses = []
     receiver._last   = None
 
+    listen_led.start()
     packet = receiver.wait_for_packet(timeout=15)
+    listen_led.stop()
+
     if packet is None:
         print("  Timed out — skipping.")
         return "skip"
@@ -204,7 +236,7 @@ def learn_one_code(receiver, conn, name):
     print(f"  ✓ Saved '{name}'.")
     return "saved"
 
-def learn_all(receiver, conn):
+def learn_all(receiver, conn, listen_led):
     empty = [name for name in BUTTON_ORDER if not db_is_learned(conn, name)]
     if not empty:
         print("\n  All 13 buttons already learned. Use 'c' to clear and re-learn.")
@@ -216,7 +248,7 @@ def learn_all(receiver, conn):
     print( "  Tip: wait out the 15s timeout to skip a button.\n")
 
     for name in empty:
-        result = learn_one_code(receiver, conn, name)
+        result = learn_one_code(receiver, conn, name, listen_led)
         if result == "saved":
             learned += 1
         elif result == "quit":
@@ -235,8 +267,12 @@ def main():
     pi.set_mode(IR_RECV_PIN, pigpio.INPUT)
     pi.set_pull_up_down(IR_RECV_PIN, pigpio.PUD_UP)
 
-    receiver = IRReceiver(pi, IR_RECV_PIN)
-    conn     = db_connect()
+    pi.set_mode(LISTEN_LED_PIN, pigpio.OUTPUT)
+    pi.write(LISTEN_LED_PIN, 0)
+
+    receiver   = IRReceiver(pi, IR_RECV_PIN)
+    conn       = db_connect()
+    listen_led = ListenLED(pi, LISTEN_LED_PIN)
 
     print("\n=== IR Code Learner ===")
     print(f"Database: {DB_FILE}")
@@ -245,7 +281,7 @@ def main():
     try:
         while True:
             cmd = input("\n> ").strip().lower()
-            if   cmd == 'l': learn_all(receiver, conn)
+            if   cmd == 'l': learn_all(receiver, conn, listen_led)
             elif cmd == 'v': db_view(conn)
             elif cmd == 'c':
                 if input("  Delete ALL codes? (y/n): ").strip().lower() == 'y':
@@ -257,6 +293,7 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        listen_led.stop()
         receiver.cancel()
         conn.close()
         pi.stop()
