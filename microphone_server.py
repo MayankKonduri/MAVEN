@@ -9,6 +9,7 @@ Endpoints:
   /status      -> mic health JSON
   /level       -> current RMS volume JSON
   /recent.wav  -> last N seconds as WAV file
+  /recent_5s.wav -> last 5 seconds as WAV file
   /recent.raw  -> last N seconds as raw PCM
   /trigger_capture -> freeze latest chunk, return WAV (for speech recognition)
 """
@@ -94,6 +95,13 @@ def buffer_to_wav(chunks):
             wf.writeframes(chunk)
     buf.seek(0)
     return buf.read()
+
+
+def get_last_n_seconds_chunks(seconds):
+    """Return the most recent `seconds` worth of buffered audio chunks."""
+    chunks_needed = int((SAMPLE_RATE / CHUNK_SAMPLES) * seconds)
+    with BUFFER_LOCK:
+        return list(audio_buffer)[-chunks_needed:]
 
 
 # ─── Mic Capture Thread ───────────────────────────────────────────────────────
@@ -209,6 +217,18 @@ def recent_wav():
     wav_bytes = buffer_to_wav(chunks)
     return Response(wav_bytes, mimetype="audio/wav",
                     headers={"Content-Disposition": "inline; filename=recent.wav"})
+
+
+@app.route("/recent_5s.wav")
+def recent_5s_wav():
+    if not mic_ok:
+        return "Microphone Not Found", 503
+    chunks = get_last_n_seconds_chunks(5)
+    if not chunks:
+        return "Buffer empty", 503
+    wav_bytes = buffer_to_wav(chunks)
+    return Response(wav_bytes, mimetype="audio/wav",
+                    headers={"Content-Disposition": "inline; filename=recent_5s.wav"})
 
 
 @app.route("/trigger_capture")

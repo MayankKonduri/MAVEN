@@ -268,6 +268,13 @@ def api_confirm_pair():
     return jsonify({"ok": True, "token": SESSION_TOKEN})
 
 # ── PROTECTED ENDPOINTS ───────────────────────────────────────────────────────
+
+@app.route("/api/local/token")
+def api_local_token():
+    if request.remote_addr != "127.0.0.1":
+        abort(403)
+    return jsonify({"ok": True, "token": SESSION_TOKEN})
+
 @app.route("/api/codes")
 def api_codes():
     require_token()
