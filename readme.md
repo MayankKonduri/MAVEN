@@ -149,3 +149,156 @@ MayankKonduri/MAVEN
 * Always test changes locally by restarting the appropriate service before committing and pushing to GitHub.
 
 * Keep `MAVEN_BACKUP` as a temporary safety copy until the new system has been fully validated.
+
+
+---
+
+# USB Microphone Troubleshooting & Calibration
+
+If the USB microphone is unplugged and plugged back in, it may reset its audio settings. Common issues include:
+
+* Auto Gain Control (AGC) turning back on
+* Microphone gain returning to 100%
+* MAVEN input levels becoming too sensitive
+
+### Symptoms
+
+* Idle noise is high (10–50%)
+* MAVEN does not reliably detect wake words
+* The input level meter constantly jumps without speaking
+
+---
+
+## 1. Verify the Correct USB Microphone
+
+Before making any adjustments, make sure MAVEN is using the USB microphone and not the Raspberry Pi's built-in audio device.
+
+Check available recording devices:
+
+```bash
+arecord -l
+```
+
+You should see something similar to:
+
+```text
+**** List of CAPTURE Hardware Devices ****
+card 1: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]
+```
+
+Open the USB microphone mixer directly:
+
+```bash
+alsamixer -c 1
+```
+
+Verify the top-left corner shows:
+
+```text
+Card: USB PnP Sound Device
+Chip: USB Mixer
+```
+
+**Do not adjust:**
+
+```text
+Card: bcm2835 Headphones
+Chip: Broadcom Mixer
+```
+
+because that is the Raspberry Pi audio output, not the MAVEN USB microphone.
+
+---
+
+## 2. Adjust USB Microphone Gain
+
+Inside `alsamixer`:
+
+1. Switch to **Capture** view (`F4`)
+2. Navigate to the **Mic** control
+3. Disable **Auto Gain Control (AGC)**
+4. Lower the microphone gain
+
+Recommended settings:
+
+* Auto Gain Control: **OFF**
+* Mic Gain: ~40–60%
+* Avoid 100% / +23.81 dB gain
+
+A good microphone level target:
+
+| Condition                       | Desired Input Level |
+| ------------------------------- | ------------------- |
+| Silent room                     | 0–5%                |
+| Background noise                | 5–10%               |
+| Normal speech                   | 20–50%              |
+| Loud speech close to microphone | 60–100%             |
+
+---
+
+## 3. Save ALSA Microphone Settings
+
+After adjusting the microphone:
+
+Exit `alsamixer` and run:
+
+```bash
+sudo alsactl store
+```
+
+This saves the USB microphone settings so they persist after reboot.
+
+---
+
+## 4. Restart MAVEN Audio Services
+
+The microphone server and voice assistant need to reload the updated audio configuration:
+
+```bash
+sudo systemctl restart maven-mic.service
+sudo systemctl restart maven-voice.service
+```
+
+
+---
+
+
+## 5. Verify MAVEN Input Levels
+
+Open the MAVEN microphone input level page and confirm:
+
+* Quiet room: around 0–5%
+* Normal ambient noise: 5–10%
+* Saying "MAVEN": around 20–50%
+* Loud speech close to the mic: 60–100%
+
+If the idle level is still too high, return to:
+
+```bash
+alsamixer -c 1
+```
+
+and further reduce the microphone gain.
+
+---
+
+## Quick Recovery After Unplugging the USB Mic
+
+If MAVEN stops recognizing your voice after unplugging/replugging the microphone:
+
+```bash
+# Verify USB microphone is detected
+arecord -l
+
+# Open USB microphone controls
+alsamixer -c 1
+
+# Save audio settings
+sudo alsactl store
+
+# Reload MAVEN microphone and voice services
+sudo systemctl restart maven-mic.service
+sudo systemctl restart maven-voice.service
+```
+
+This process restores the USB microphone configuration and reloads MAVEN with the updated audio settings.

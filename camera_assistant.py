@@ -5,12 +5,16 @@ import onnxruntime as ort
 from collections import deque
 from datetime import datetime
 from enum import Enum
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
+import threading
 
 CAMERA_URL     = "http://localhost:8081"
 PERSON_MODEL   = "models/yolov8n.onnx"
 HAND_MODEL     = "models/hand_yolov8n.onnx"
 LANDMARK_MODEL = "models/handpose_estimation.onnx"
 IR_SERVER_URL  = "http://localhost:5000"
+VOICE_ASSISTANT_URL = "http://localhost:8083"
 
 INTERVAL       = 0.5
 CONF_THRESH    = 0.4
@@ -74,6 +78,62 @@ gesture_hold_start_time = None
 last_gesture_held       = None
 gesture_triggered       = False
 cooldown_until          = 0.0
+
+# ── LED control ────────────────────────────────────────────────────────────────
+try:
+    import pigpio
+    pi = pigpio.pi()
+    if not pi.connected:
+        pi = None
+except Exception:
+    pi = None
+
+GREEN_LED_PIN = 23
+
+def led_on():
+    """Turn the green LED on (solid)."""
+    if pi:
+        pi.write(GREEN_LED_PIN, 1)
+
+def led_off():
+    """Turn the green LED off."""
+    if pi:
+        pi.write(GREEN_LED_PIN, 0)
+
+# ── State Publishing ───────────────────────────────────────────────────────────
+
+camera_state = {"person_present": False}
+camera_state_lock = threading.Lock()
+
+class StateHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/state":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            with camera_state_lock:
+                self.wfile.write(json.dumps(camera_state).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass
+
+def start_state_server():
+    server = HTTPServer(("localhost", 8084), StateHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+def get_voice_state():
+    """Fetch state from voice_assistant"""
+    try:
+        r = requests.get(f"{VOICE_ASSISTANT_URL}/state", timeout=1)
+        if r.status_code == 200:
+            return r.json().get("state", "idle")
+    except Exception:
+        pass
+    return "idle"
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 
@@ -448,6 +508,8 @@ else:
 
 print()
 
+start_state_server()
+
 # ── Main Loop ──────────────────────────────────────────────────────────────────
 
 while True:
@@ -469,6 +531,7 @@ while True:
         gesture_stable = False
         time_held = 0.0
         in_center = False
+        person_present = False
     else:
         hand_box, hand_conf = detect_best_hand(frame)
         in_center = is_hand_in_center(frame, hand_box)
@@ -499,6 +562,18 @@ while True:
         
         # Rules 4, 6, 7: Update gesture hold tracking
         gesture_stable, time_held, should_trigger = update_gesture_hold(gesture)
+        person_present = True
+
+    # Update camera state
+    with camera_state_lock:
+        camera_state["person_present"] = person_present
+
+    # Check voice state and update LED
+    voice_state = get_voice_state()
+    if person_present and voice_state != "active":
+        led_on()
+    else:
+        led_off()
 
     state = f"{gesture}/{person_count}p" if hand_present else f"PERSON/{person_count}p" if person_count > 0 else "EMPTY"
 
