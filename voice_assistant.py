@@ -28,6 +28,8 @@ import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import json
 
 # ── pigpio for LED control ─────────────────────────────────────────────────────
 # Green LED on GPIO 23 lights up when command mode is active.
@@ -45,6 +47,7 @@ except Exception:
 
 MIC_SERVER_URL = "http://localhost:8082"
 IR_SERVER_URL = "http://localhost:5000"
+CAMERA_ASSISTANT_URL = "http://localhost:8083"
 
 WHISPER_MODEL = "base.en"
 
@@ -100,17 +103,81 @@ WHISPER_TIMEOUT_SECONDS = 20.0 # abort transcription if it takes longer than thi
 # Prevents the wake phrase from leaking into the first command clip.
 WAKE_FLUSH_SECONDS = 1.5
 
-# ── LED helpers ────────────────────────────────────────────────────────────────
+# ── LED state ──────────────────────────────────────────────────────────────────
+
+led_blink_active = False
+led_blink_stop = False
 
 def led_on():
-    """Turn the green command-mode LED on."""
+    """Turn the green command-mode LED on (solid)."""
+    global led_blink_active, led_blink_stop
+    led_blink_active = False
+    led_blink_stop = True
     if pi:
         pi.write(GREEN_LED_PIN, 1)
 
 def led_off():
     """Turn the green command-mode LED off."""
+    global led_blink_active, led_blink_stop
+    led_blink_active = False
+    led_blink_stop = True
     if pi:
         pi.write(GREEN_LED_PIN, 0)
+
+def led_blink():
+    """Blink the green command-mode LED."""
+    global led_blink_active, led_blink_stop
+    led_blink_stop = False
+    if led_blink_active:
+        return
+    led_blink_active = True
+    
+    def _blink():
+        while not led_blink_stop:
+            if pi:
+                pi.write(GREEN_LED_PIN, 1)
+            time.sleep(0.3)
+            if pi:
+                pi.write(GREEN_LED_PIN, 0)
+            time.sleep(0.3)
+    
+    t = threading.Thread(target=_blink, daemon=True)
+    t.start()
+
+# ── State Publishing ───────────────────────────────────────────────────────────
+
+voice_state = {"state": "idle"}
+voice_state_lock = threading.Lock()
+
+class StateHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/state":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            with voice_state_lock:
+                self.wfile.write(json.dumps(voice_state).encode())
+        else:
+            self.send_response(404)
+            self.end_headers()
+    
+    def log_message(self, format, *args):
+        pass
+
+def start_state_server():
+    server = HTTPServer(("localhost", 8083), StateHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+
+def get_camera_state():
+    """Fetch person_present state from camera_assistant"""
+    try:
+        r = requests.get(f"{CAMERA_ASSISTANT_URL}/state", timeout=1)
+        if r.status_code == 200:
+            return r.json().get("person_present", False)
+    except Exception:
+        pass
+    return False
 
 # ── IR Token ──────────────────────────────────────────────────────────────────
 
@@ -596,7 +663,7 @@ class VoiceAssistant:
 
     def _enter_active_mode(self):
         """
-        Flush stale audio buffer, turn LED on, then enter 5-minute ACTIVE_COMMAND mode.
+        Flush stale audio buffer, turn LED on (blinking), then enter 5-minute ACTIVE_COMMAND mode.
         The flush pause ensures the wake phrase doesn't bleed into the first
         command clip.
         """
@@ -607,21 +674,35 @@ class VoiceAssistant:
         # Short silence: let the mic buffer roll forward past the wake phrase
         time.sleep(WAKE_FLUSH_SECONDS)
 
-        led_on() # green LED on while in command mode
+        led_blink() # green LED blinking while in command mode
 
         self.state = State.ACTIVE
         self.active_until = time.time() + ACTIVE_MODE_SECONDS
         self._last_status_log = 0.0
 
+        with voice_state_lock:
+            voice_state["state"] = "active"
+
     def _exit_active_mode(self, reason: str):
         """
-        Turn LED off and return to IDLE (wake word) mode.
+        Turn LED off or set to solid based on camera state, then return to IDLE (wake word) mode.
         Called on timeout or when a goodbye phrase is detected.
         """
         log(LogLevel.INFO, reason)
-        led_off() # green LED off when leaving command mode
+        
+        # Check if person is still in frame
+        camera_has_person = get_camera_state()
+        
+        if camera_has_person:
+            led_on() # solid green if person still in frame
+        else:
+            led_off() # off if person left
+        
         self.state = State.IDLE
         self._last_status_log = 0.0
+
+        with voice_state_lock:
+            voice_state["state"] = "idle"
 
     def _execute_command(self, raw_text: str):
         """Parse command text and fire IR if matched"""
@@ -654,7 +735,7 @@ def main():
             "Add /api/local/token to pi_server.py — see comment near top of this file.")
         print()
 
-     # ── Startup Health Checks ─────────────────────────
+     # ── Startup Health Checks ─────────────────────────────────────
 
     log(LogLevel.INFO, "Running startup health checks...")
 
@@ -676,6 +757,7 @@ def main():
     except Exception as e:
         log(LogLevel.ERROR, f"❌ IR server unreachable: {e}")
     
+    start_state_server()
     init_whisper()
 
     assistant = VoiceAssistant()
