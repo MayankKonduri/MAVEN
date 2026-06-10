@@ -100,13 +100,32 @@ def status():
     })
 
 
+# @app.route("/frame.jpg")
+# def frame_jpg():
+#     if not camera_ok:
+#         return "Camera Not Found", 503
+
+#     change_viewers(+1)
+#     try:
+#         time.sleep(0.15)
+#         with FRAME_LOCK:
+#             frame = latest_jpeg
+#     finally:
+#         change_viewers(-1)
+
+#     if frame is None:
+#         return "Frame not ready", 503
+#     return Response(frame, mimetype="image/jpeg")
+
 @app.route("/frame.jpg")
 def frame_jpg():
     if not camera_ok:
         return "Camera Not Found", 503
 
+    # Temporarily increment viewer count to trigger frame capture
     change_viewers(+1)
     try:
+        # Wait for a frame to be captured
         time.sleep(0.15)
         with FRAME_LOCK:
             frame = latest_jpeg
@@ -115,6 +134,7 @@ def frame_jpg():
 
     if frame is None:
         return "Frame not ready", 503
+    
     return Response(frame, mimetype="image/jpeg")
 
 
