@@ -1,6 +1,247 @@
-# MAVEN Development & Deployment Workflow
+<div align="center">
 
-## Project Location
+# 🎙️ MAVEN
+
+### Voice + Gesture Controlled TV Assistant for Raspberry Pi
+
+<p>
+  <img src="https://img.shields.io/badge/Python-3.9+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python" />
+  <img src="https://img.shields.io/badge/Raspberry_Pi-Deployed-A22846?style=for-the-badge&logo=raspberrypi&logoColor=white" alt="Raspberry Pi" />
+  <img src="https://img.shields.io/badge/Flask-Servers-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask" />
+  <img src="https://img.shields.io/badge/ONNX-Runtime-005CED?style=for-the-badge&logo=onnx&logoColor=white" alt="ONNX" />
+</p>
+
+<p>
+  <img src="https://img.shields.io/badge/STT-faster--whisper_base.en-4B8BBE?style=flat-square" alt="Whisper" />
+  <img src="https://img.shields.io/badge/vision-YOLOv8n_+_handpose-00A67E?style=flat-square" alt="Vision" />
+  <img src="https://img.shields.io/badge/IR-38kHz_pigpio-FF6B35?style=flat-square" alt="IR" />
+  <img src="https://img.shields.io/badge/services-4_systemd_units-yellow?style=flat-square" alt="Services" />
+</p>
+
+</div>
+
+---
+
+## 📖 What MAVEN Is
+
+MAVEN turns any IR-controlled TV into a hands-free device. It runs entirely **on-device** on a Raspberry Pi — no cloud, no external API calls. Speech is transcribed locally with `faster-whisper`, hand gestures are recognized locally with ONNX vision models, and both paths converge on a single IR blaster that replays learned remote codes.
+
+<table>
+<tr>
+<td width="55"><h3 align="center">🗣️</h3></td>
+<td><b>Voice</b><br>Say a wake word, then speak commands in natural language for five minutes.</td>
+</tr>
+<tr>
+<td width="55"><h3 align="center">✋</h3></td>
+<td><b>Gesture</b><br>Hold an open palm, thumbs up, or thumbs down in front of the camera.</td>
+</tr>
+<tr>
+<td width="55"><h3 align="center">📡</h3></td>
+<td><b>IR Replay</b><br>Learned pulse trains stored in SQLite, retransmitted on a 38 kHz carrier.</td>
+</tr>
+<tr>
+<td width="55"><h3 align="center">💡</h3></td>
+<td><b>LED Feedback</b><br>Green = listening/active, red = command fired.</td>
+</tr>
+</table>
+
+---
+
+## 🏗️ Architecture
+
+MAVEN is four independent processes that talk to each other over `localhost` HTTP. Each one runs as its own `systemd` unit, so any single component can be restarted without taking down the rest.
+
+```
+        ┌──────────────────┐          ┌──────────────────┐
+        │  microphone_     │          │  camera_server   │
+        │  server.py :8082 │          │      :8081       │
+        │                  │          │                  │
+        │  USB mic →       │          │  Picamera2 →     │
+        │  10s rolling     │          │  640x480 @12fps  │
+        │  PCM buffer      │          │  MJPEG frames    │
+        └────────┬─────────┘          └─────────┬────────┘
+                 │ /level, /recent_5s.wav       │ /frame.jpg
+                 ▼                              ▼
+        ┌──────────────────┐          ┌──────────────────┐
+        │ voice_assistant  │◄────────►│ camera_assistant │
+        │   state :8083    │  state   │   state :8084    │
+        │                  │  swap    │                  │
+        │ VAD → Whisper →  │          │ YOLOv8n person → │
+        │ regex intent     │          │ hand → landmarks │
+        └────────┬─────────┘          └─────────┬────────┘
+                 │      POST /api/send/<button> │
+                 │      X-Maven-Token: <token>  │
+                 └───────────────┬──────────────┘
+                                 ▼
+                     ┌───────────────────────┐
+                     │   pi_server.py :5000  │
+                     │                       │
+                     │  SQLite ir_codes.db   │
+                     │  → pigpio waveform    │
+                     │  → IR LED (GPIO 17)   │
+                     └───────────────────────┘
+                                 ▼
+                              📺 TV
+```
+
+### Service & Port Map
+
+| Service | File | Port | Responsibility |
+| :--- | :--- | :---: | :--- |
+| **IR Server** | `pi_server.py` | `5000` | IR learn/send, SQLite codes, session tokens, pairing |
+| **Camera Server** | `camera_server.py` | `8081` | Picamera2 capture, JPEG frames, MJPEG stream |
+| **Microphone Server** | `microphone_server.py` | `8082` | Rolling 10s audio buffer, RMS levels, WAV export |
+| **Voice Assistant** | `voice_assistant.py` | `8083` | VAD, Whisper STT, wake words, intent → IR |
+| **Camera Assistant** | `camera_assistant.py` | `8084` | Person + hand detection, gesture → IR |
+
+> [!NOTE]
+> `8083` and `8084` serve only a tiny `/state` JSON endpoint. The two assistants poll each other so a gesture doesn't fire while a voice command is mid-flight.
+
+---
+
+## 📂 Repository Layout
+
+```
+MAVEN/
+├── pi_server.py                 # IR server — Flask, pigpio, SQLite, web UI
+├── camera_server.py             # Picamera2 → MJPEG/JPEG endpoints
+├── microphone_server.py         # DVR-style rolling audio buffer + dashboard
+├── voice_assistant.py           # wake word → Whisper → intent → IR
+├── camera_assistant.py          # YOLOv8n → hand → landmarks → gesture → IR
+│
+├── ir_codes.db                  # SQLite: learned IR pulse trains
+├── models/
+│   ├── yolov8n.onnx             # person detection      (~12 MB)
+│   ├── hand_yolov8n.onnx        # hand detection        (~12 MB)
+│   └── handpose_estimation.onnx # 21-point landmarks    (~4 MB)
+│
+├── TV_Control_Original/         # standalone prototypes (pre-integration)
+│   ├── TV_Control_Learn_IRCodes.py
+│   ├── TV_Control_Use_IRCodes.py
+│   └── TV_Control_Predefined_IRCodes.py
+│
+├── keyboard_test_token.py       # manual IR button tester (CLI)
+├── test_landmarks.py            # hand landmark visualizer
+├── test.py                      # trivial connectivity check
+├── debug_camera_assistant.jpg   # last annotated gesture frame
+└── debug_landmarks.jpg          # last annotated landmark frame
+```
+
+---
+
+## 🔌 Hardware & GPIO
+
+<div align="center">
+
+| GPIO | Component | Direction | Notes |
+| :---: | :--- | :---: | :--- |
+| **17** | IR transmit LED | OUT | 38 kHz carrier, 33% duty |
+| **22** | Red status LED | OUT | Flashes when an IR code is sent |
+| **23** | Green listen LED | OUT | Solid/blinking during active command mode |
+| **24** | Pairing button | IN (pull-down) | Hold ~3–5s to enter discovery mode |
+| **27** | IR receive sensor | IN (pull-up) | Used during code learning |
+
+</div>
+
+**Also required:** USB microphone (`USB PnP Sound Device`), Raspberry Pi Camera module, and a running `pigpiod` daemon.
+
+<details>
+<summary><b>📦 Python dependencies</b></summary>
+
+<br>
+
+```bash
+pip install flask flask-cors requests pigpio pyaudio \
+            faster-whisper onnxruntime opencv-python numpy
+```
+
+`picamera2` ships with Raspberry Pi OS — install via `sudo apt install -y python3-picamera2` rather than pip.
+
+> [!TIP]
+> There is no `requirements.txt` in the repo yet. Freezing one from the working Pi would make redeploys far less painful:
+> ```bash
+> pip freeze > requirements.txt
+> ```
+
+</details>
+
+---
+
+## 🗣️ Voice Commands
+
+Say a wake word, wait for the **green LED**, then issue commands. Command mode stays open for **5 minutes** and can be exited early by saying *"bye"*, *"goodbye"*, or *"stop listening"*.
+
+**Wake words:** `maven` — plus ~20 phonetic variants the transcriber commonly produces (*mavin, mayven, raven, haven, nathan*), and prefixed forms like *"hey maven"* / *"okay maven"*.
+
+<div align="center">
+
+| Say | Action | IR Button |
+| :--- | :--- | :--- |
+| "power" · "turn it on/off" | Toggle power | `power_toggle` |
+| "volume up" · "turn up the volume" | Volume up | `vol_up` |
+| "volume down" · "quieter" | Volume down | `vol_down` |
+| "mute" · "unmute" | Toggle mute | `mute` |
+| "channel up" · "next channel" | Channel up | `channel_up` |
+| "channel down" · "previous channel" | Channel down | `channel_down` |
+| "home" · "menu" | Home screen | `home` |
+| "up" · "down" · "left" · "right" | D-pad navigation | `up` `down` `left` `right` |
+| "select" · "enter" · "ok" | Confirm | `enter` |
+| "back" · "return" · "exit" | Go back | `return` |
+
+</div>
+
+> [!NOTE]
+> Bare **"up"** and **"down"** are navigation. Volume requires the word *"volume"* explicitly — this disambiguation is intentional.
+
+<details>
+<summary><b>⚙️ Voice tuning constants</b> <code>voice_assistant.py</code></summary>
+
+<br>
+
+| Constant | Default | Meaning |
+| :--- | :---: | :--- |
+| `VOICE_ACTIVITY_THRESHOLD` | `12.0` | RMS % that counts as speech |
+| `SILENCE_AFTER_SPEECH_SECONDS` | `2.5` | Stable silence before transcribing |
+| `ACTIVE_MODE_SECONDS` | `300` | How long command mode stays open |
+| `WAKE_COOLDOWN` | `2.0` | Minimum gap between wake detections |
+| `WAKE_FLUSH_SECONDS` | `1.5` | Buffer flush so the wake word doesn't leak into the command |
+| `WHISPER_TIMEOUT_SECONDS` | `20.0` | Abort a stuck transcription |
+| `WHISPER_MODEL` | `base.en` | Swap to `tiny.en` for speed, `small.en` for accuracy |
+
+</details>
+
+---
+
+## ✋ Gesture Commands
+
+Hold a gesture steady for **~2.3 seconds** near the center of frame. A **2.5s cooldown** follows each trigger.
+
+<div align="center">
+
+| Gesture | Action | IR Button |
+| :---: | :--- | :--- |
+| 🖐️ **Open palm** | Toggle power | `power_toggle` |
+| 👍 **Thumbs up** | Volume up | `vol_up` |
+| 👎 **Thumbs down** | Volume down | `vol_down` |
+
+</div>
+
+The pipeline runs at ~2 Hz: YOLOv8n confirms a person, a second detector finds the hand, and the handpose model returns 21 landmarks that are classified by finger extension. Detections are smoothed over a 5-frame window requiring 3 agreements before acting.
+
+---
+
+<div align="center">
+
+# 🛠️ Development & Deployment Workflow
+
+</div>
+
+---
+
+## 📍 Project Location
+
+> [!CAUTION]
+> **Only one directory is live.** Edits anywhere else silently do nothing.
 
 **Active MAVEN project directory:**
 
@@ -17,67 +258,48 @@ This is the only directory that should be used for development.
 /home/mayankkonduri/MAVEN_BACKUP
 ```
 
-These directories are legacy backups from the Git corruption recovery and are not connected to the active system services.
+These are legacy backups from the Git corruption recovery and are not connected to the active system services.
 
 ---
 
-# Making Code Changes
+## ✏️ Making Code Changes
 
-1. Open and edit files inside:
-
-```bash
-/home/mayankkonduri/MAVEN_CLEAN
-```
-
-Example:
+1. Open and edit files inside `/home/mayankkonduri/MAVEN_CLEAN` — for example:
 
 ```bash
 /home/mayankkonduri/MAVEN_CLEAN/voice_assistant.py
 ```
 
 2. Save your changes.
+3. Restart the matching service (below) so the Pi loads the updated code.
 
 ---
 
-# Restarting MAVEN Services
+## 🔄 Restarting MAVEN Services
 
-After modifying a file, restart the corresponding service so the Raspberry Pi loads the updated code.
+<div align="center">
 
-## Voice Assistant
+| Component | Command |
+| :--- | :--- |
+| Voice Assistant | `sudo systemctl restart maven-voice.service` |
+| Camera Server | `sudo systemctl restart maven-camera.service` |
+| Microphone Server | `sudo systemctl restart maven-mic.service` |
+| IR Server | `sudo systemctl restart maven.service` |
 
-```bash
-sudo systemctl restart maven-voice.service
-```
+</div>
 
-## Camera Server
-
-```bash
-sudo systemctl restart maven-camera.service
-```
-
-## Microphone Server
-
-```bash
-sudo systemctl restart maven-mic.service
-```
-
-## IR Server
-
-```bash
-sudo systemctl restart maven.service
-```
-
-## Restart All MAVEN Services
+**Restart everything:**
 
 ```bash
 sudo systemctl restart maven.service maven-camera.service maven-mic.service maven-voice.service
 ```
 
+> [!IMPORTANT]
+> `pi_server.py` mints a **fresh session token on every start**. If you restart the IR server, the assistants still hold the old token and will get `403` on every send — restart them too.
+
 ---
 
-# Checking Service Status
-
-Check all MAVEN services:
+## 📊 Checking Service Status
 
 ```bash
 systemctl status maven.service maven-camera.service maven-mic.service maven-voice.service
@@ -85,37 +307,40 @@ systemctl status maven.service maven-camera.service maven-mic.service maven-voic
 
 ---
 
-# Viewing Logs
+## 📜 Viewing Logs
 
-## Voice Assistant Logs
+<div align="center">
 
-```bash
-journalctl -u maven-voice.service -f
-```
+| Component | Command |
+| :--- | :--- |
+| Voice Assistant | `journalctl -u maven-voice.service -f` |
+| Camera Server | `journalctl -u maven-camera.service -f` |
+| Microphone Server | `journalctl -u maven-mic.service -f` |
+| IR Server | `journalctl -u maven.service -f` |
 
-## Camera Server Logs
-
-```bash
-journalctl -u maven-camera.service -f
-```
-
-## Microphone Server Logs
-
-```bash
-journalctl -u maven-mic.service -f
-```
-
-## IR Server Logs
-
-```bash
-journalctl -u maven.service -f
-```
+</div>
 
 Press `Ctrl + C` to exit the live log view.
 
 ---
 
-# Saving Changes to GitHub
+## 🌐 Web Dashboards
+
+Every server exposes a browser UI — useful for diagnosing a problem without reading logs.
+
+<div align="center">
+
+| Dashboard | URL | What it shows |
+| :--- | :--- | :--- |
+| IR Control Panel | `http://<pi-ip>:5000/` | Learn and fire each button |
+| Camera Stream | `http://<pi-ip>:8081/` | Live MJPEG view |
+| Microphone Meter | `http://<pi-ip>:8082/` | Live input level + audio playback |
+
+</div>
+
+---
+
+## 📤 Saving Changes to GitHub
 
 After your changes have been tested and verified:
 
@@ -128,52 +353,42 @@ git commit -m "Describe what you changed"
 git push
 ```
 
-This updates the GitHub repository:
-
-```
-MayankKonduri/MAVEN
-```
+This updates the repository: **[MayankKonduri/MAVEN](https://github.com/MayankKonduri/MAVEN)**
 
 ---
 
-# Important Notes
+## 📌 Important Notes
 
-* The Raspberry Pi `systemd` services are configured to run code from:
-
-```bash
-/home/mayankkonduri/MAVEN_CLEAN
-```
-
-* Editing files in the old `MAVEN` directory will have **no effect** on the running system.
-
-* Always test changes locally by restarting the appropriate service before committing and pushing to GitHub.
-
-* Keep `MAVEN_BACKUP` as a temporary safety copy until the new system has been fully validated.
-
+- The Raspberry Pi `systemd` services run code from `/home/mayankkonduri/MAVEN_CLEAN`.
+- Editing files in the old `MAVEN` directory will have **no effect** on the running system.
+- Always test changes locally by restarting the appropriate service before committing and pushing.
+- Keep `MAVEN_BACKUP` as a temporary safety copy until the new system has been fully validated.
 
 ---
 
-# USB Microphone Troubleshooting & Calibration
+<div align="center">
 
-If the USB microphone is unplugged and plugged back in, it may reset its audio settings. Common issues include:
+# 🎤 USB Microphone Troubleshooting & Calibration
 
-* Auto Gain Control (AGC) turning back on
-* Microphone gain returning to 100%
-* MAVEN input levels becoming too sensitive
+</div>
+
+If the USB microphone is unplugged and plugged back in, it may reset its audio settings. Common issues:
+
+- Auto Gain Control (AGC) turning back on
+- Microphone gain returning to 100%
+- MAVEN input levels becoming too sensitive
 
 ### Symptoms
 
-* Idle noise is high (10–50%)
-* MAVEN does not reliably detect wake words
-* The input level meter constantly jumps without speaking
+- Idle noise is high (10–50%)
+- MAVEN does not reliably detect wake words
+- The input level meter constantly jumps without speaking
 
 ---
 
-## 1. Verify the Correct USB Microphone
+### 1. Verify the Correct USB Microphone
 
-Before making any adjustments, make sure MAVEN is using the USB microphone and not the Raspberry Pi's built-in audio device.
-
-Check available recording devices:
+Make sure MAVEN is using the USB microphone and not the Pi's built-in audio device.
 
 ```bash
 arecord -l
@@ -199,18 +414,15 @@ Card: USB PnP Sound Device
 Chip: USB Mixer
 ```
 
-**Do not adjust:**
+> [!WARNING]
+> **Do not adjust** `Card: bcm2835 Headphones` / `Chip: Broadcom Mixer` — that is the Pi's audio *output*, not the MAVEN microphone.
 
-```text
-Card: bcm2835 Headphones
-Chip: Broadcom Mixer
-```
-
-because that is the Raspberry Pi audio output, not the MAVEN USB microphone.
+> [!NOTE]
+> `microphone_server.py` currently hardcodes `ALSA_DEVICE = "plughw:3,0"`. If `arecord -l` reports a different card number, update that constant to match — or set it to `None` to auto-detect the USB PnP device.
 
 ---
 
-## 2. Adjust USB Microphone Gain
+### 2. Adjust USB Microphone Gain
 
 Inside `alsamixer`:
 
@@ -219,26 +431,31 @@ Inside `alsamixer`:
 3. Disable **Auto Gain Control (AGC)**
 4. Lower the microphone gain
 
-Recommended settings:
+**Recommended settings:**
 
-* Auto Gain Control: **OFF**
-* Mic Gain: ~40–60%
-* Avoid 100% / +23.81 dB gain
+- Auto Gain Control: **OFF**
+- Mic Gain: **~40–60%**
+- Avoid 100% / +23.81 dB gain
 
-A good microphone level target:
+**Target input levels:**
 
-| Condition                       | Desired Input Level |
-| ------------------------------- | ------------------- |
-| Silent room                     | 0–5%                |
-| Background noise                | 5–10%               |
-| Normal speech                   | 20–50%              |
-| Loud speech close to microphone | 60–100%             |
+<div align="center">
+
+| Condition | Desired Input Level |
+| :--- | :---: |
+| Silent room | 0–5% |
+| Background noise | 5–10% |
+| Normal speech | 20–50% |
+| Loud speech close to microphone | 60–100% |
+
+</div>
+
+> [!TIP]
+> Keep idle noise well under the `VOICE_ACTIVITY_THRESHOLD` of **12%**. If the room floor sits above that, MAVEN transcribes silence continuously and burns CPU on Whisper.
 
 ---
 
-## 3. Save ALSA Microphone Settings
-
-After adjusting the microphone:
+### 3. Save ALSA Microphone Settings
 
 Exit `alsamixer` and run:
 
@@ -246,45 +463,33 @@ Exit `alsamixer` and run:
 sudo alsactl store
 ```
 
-This saves the USB microphone settings so they persist after reboot.
+This saves the settings so they persist after reboot.
 
 ---
 
-## 4. Restart MAVEN Audio Services
-
-The microphone server and voice assistant need to reload the updated audio configuration:
+### 4. Restart MAVEN Audio Services
 
 ```bash
 sudo systemctl restart maven-mic.service
 sudo systemctl restart maven-voice.service
 ```
 
+---
+
+### 5. Verify MAVEN Input Levels
+
+Open the MAVEN microphone input level page (`http://<pi-ip>:8082/`) and confirm:
+
+- Quiet room: around 0–5%
+- Normal ambient noise: 5–10%
+- Saying "MAVEN": around 20–50%
+- Loud speech close to the mic: 60–100%
+
+If the idle level is still too high, return to `alsamixer -c 1` and further reduce the gain.
 
 ---
 
-
-## 5. Verify MAVEN Input Levels
-
-Open the MAVEN microphone input level page and confirm:
-
-* Quiet room: around 0–5%
-* Normal ambient noise: 5–10%
-* Saying "MAVEN": around 20–50%
-* Loud speech close to the mic: 60–100%
-
-If the idle level is still too high, return to:
-
-```bash
-alsamixer -c 1
-```
-
-and further reduce the microphone gain.
-
----
-
-## Quick Recovery After Unplugging the USB Mic
-
-If MAVEN stops recognizing your voice after unplugging/replugging the microphone:
+### ⚡ Quick Recovery After Unplugging the USB Mic
 
 ```bash
 # Verify USB microphone is detected
@@ -301,4 +506,111 @@ sudo systemctl restart maven-mic.service
 sudo systemctl restart maven-voice.service
 ```
 
-This process restores the USB microphone configuration and reloads MAVEN with the updated audio settings.
+This restores the USB microphone configuration and reloads MAVEN with the updated audio settings.
+
+---
+
+## 🧯 General Troubleshooting
+
+<details>
+<summary><b>IR commands return 403</b></summary>
+
+<br>
+
+`pi_server.py` generates a new `SESSION_TOKEN` each run. The assistants fetch it once at startup. Restart both assistants after any IR server restart:
+
+```bash
+sudo systemctl restart maven-voice.service maven-camera.service
+```
+
+</details>
+
+<details>
+<summary><b>IR commands return 404 / nothing happens</b></summary>
+
+<br>
+
+That button has no learned pulse data. Check what's stored:
+
+```bash
+sqlite3 ~/MAVEN_CLEAN/ir_codes.db \
+  "SELECT name, CASE WHEN pulses IS NULL THEN 'EMPTY' ELSE 'learned' END FROM ir_codes;"
+```
+
+Re-learn a missing button from the IR web panel at `http://<pi-ip>:5000/`, or verify manually:
+
+```bash
+python3 keyboard_test_token.py
+```
+
+</details>
+
+<details>
+<summary><b>No LED feedback</b></summary>
+
+<br>
+
+Both assistants degrade gracefully when `pigpiod` isn't running — everything works, just without lights. Start the daemon:
+
+```bash
+sudo systemctl start pigpiod
+sudo systemctl enable pigpiod
+```
+
+</details>
+
+<details>
+<summary><b>Gestures never trigger</b></summary>
+
+<br>
+
+Inspect the annotated debug frames the assistant writes on each pass:
+
+```bash
+debug_camera_assistant.jpg   # person + hand boxes
+debug_landmarks.jpg          # 21-point skeleton
+```
+
+If the hand box is missing, lower `HAND_CONF`. If landmarks look scrambled, move closer — the hand needs enough pixels at 320px input. Also confirm a person is detected first; gestures are gated on `person_present`.
+
+</details>
+
+<details>
+<summary><b>Camera won't start</b></summary>
+
+<br>
+
+```bash
+libcamera-hello --list-cameras
+```
+
+Only one process can own the camera. If `camera_server.py` is already running as a service, a second manual launch will fail.
+
+</details>
+
+---
+
+## ⚠️ Known Issues
+
+> [!WARNING]
+> **Port mismatch in `voice_assistant.py`.** It sets `CAMERA_ASSISTANT_URL = "http://localhost:8083"`, but that is its *own* state port — `camera_assistant.py` serves on **8084**. As written, the voice assistant polls itself for camera state and `person_present` always resolves to `False`. Fix:
+> ```python
+> CAMERA_ASSISTANT_URL = "http://localhost:8084"
+> ```
+
+> [!WARNING]
+> **`enter` has no IR code learned.** All other buttons in `ir_codes.db` have pulse data; `enter` is `NULL`, so "select" / "ok" commands will 404. Re-learn it from the IR panel.
+
+> [!NOTE]
+> **Green LED (GPIO 23) is shared** by `pi_server.py`, `voice_assistant.py`, and `camera_assistant.py`. Three processes drive the same pin with no arbitration, so indicator state can flicker or contradict itself.
+
+> [!NOTE]
+> **No `requirements.txt`.** Dependencies are currently implicit in the Pi's system Python. Freezing them would make the build reproducible.
+
+---
+
+<div align="center">
+
+<sub>Built for Raspberry Pi · 100% on-device inference · No cloud dependencies</sub>
+
+</div>
