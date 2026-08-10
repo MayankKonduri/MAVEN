@@ -115,6 +115,9 @@ MAVEN/
 │   ├── hand_yolov8n.onnx        # hand detection        (~12 MB)
 │   └── handpose_estimation.onnx # 21-point landmarks    (~4 MB)
 │
+├── assets/
+│   └── startup-school-2026.png  # Startup School 2026 certificate
+│
 ├── TV_Control_Original/         # standalone prototypes (pre-integration)
 │   ├── TV_Control_Learn_IRCodes.py
 │   ├── TV_Control_Use_IRCodes.py
@@ -606,6 +609,20 @@ Only one process can own the camera. If `camera_server.py` is already running as
 
 > [!NOTE]
 > **No `requirements.txt`.** Dependencies are currently implicit in the Pi's system Python. Freezing them would make the build reproducible.
+
+---
+
+## 🏅 Recognition
+
+<div align="center">
+
+<a href="https://drive.google.com/file/d/1Sd7GcJM7IIWdenIDCkewhnZhrX85JVrf/view?usp=sharing">
+  <img src="assets/startup-school-2026.png" alt="Startup School 2026 — Venkata Naga Mayank Konduri" width="650" />
+</a>
+
+<sub><b>Startup School 2026</b> · Venkata Naga Mayank Konduri</sub>
+
+</div>
 
 ---
 
