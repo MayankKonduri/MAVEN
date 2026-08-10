@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/Flask-Servers-000000?style=for-the-badge&logo=flask&logoColor=white" alt="Flask" />
   <img src="https://img.shields.io/badge/ONNX-Runtime-005CED?style=for-the-badge&logo=onnx&logoColor=white" alt="ONNX" />
 </p>
-
+ 
 <p>
   <img src="https://img.shields.io/badge/STT-faster--whisper_base.en-4B8BBE?style=flat-square" alt="Whisper" />
   <img src="https://img.shields.io/badge/vision-YOLOv8n_+_handpose-00A67E?style=flat-square" alt="Vision" />
