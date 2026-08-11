@@ -341,11 +341,7 @@ This updates the repository: **[MayankKonduri/MAVEN](https://github.com/MayankKo
 
 <div align="center">
 
-<a href="https://drive.google.com/file/d/1Sd7GcJM7IIWdenIDCkewhnZhrX85JVrf/view?usp=sharing">
-  <img src="assets/startup-school-2026-venkata-naga-mayank-konduri.png" alt="Startup School 2026 — Venkata Naga Mayank Konduri" width="650" />
-</a>
 
-<sub><b>Startup School 2026</b> · Venkata Naga Mayank Konduri</sub>
 
 </div>
 
