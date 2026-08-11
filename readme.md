@@ -341,7 +341,7 @@ This updates the repository: **[MayankKonduri/MAVEN](https://github.com/MayankKo
 
 <div align="center">
 
-
+<img width="2064" height="1560" alt="startup-school-2026-venkata-naga-mayank-konduri" src="https://github.com/user-attachments/assets/6f71b44c-f507-442d-8e69-adf505ba1644" />
 
 </div>
 
