@@ -233,38 +233,6 @@ The pipeline runs at ~2 Hz: YOLOv8n confirms a person, a second detector finds t
 
 ---
 
-<div align="center">
-
-# 🛠️ Development & Deployment Workflow
-
-</div>
-
----
-
-## 📍 Project Location
-
-> [!CAUTION]
-> **Only one directory is live.** Edits anywhere else silently do nothing.
-
-**Active MAVEN project directory:**
-
-```bash
-/home/mayankkonduri/MAVEN_CLEAN
-```
-
-This is the only directory that should be used for development.
-
-**Do NOT edit files inside:**
-
-```bash
-/home/mayankkonduri/MAVEN
-/home/mayankkonduri/MAVEN_BACKUP
-```
-
-These are legacy backups from the Git corruption recovery and are not connected to the active system services.
-
----
-
 ## ✏️ Making Code Changes
 
 1. Open and edit files inside `/home/mayankkonduri/MAVEN_CLEAN` — for example:
